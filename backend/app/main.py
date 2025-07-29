@@ -1,7 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-import logging
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pathlib import Path
+import logging
+import uvicorn
+
+# Import security middleware and settings
+from app.core.security import SecurityHeadersMiddleware
+from app.core.config import settings, get_settings
+from app.core.rate_limiter import add_rate_limiter_to_app
 
 # Configure logging
 logging.basicConfig(
@@ -12,53 +20,72 @@ logger = logging.getLogger(__name__)
 
 # Create the FastAPI app
 app = FastAPI(
-    title="Tender Management API",
-    description="API for managing tender documents and processing",
-    version="0.1.0",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    title=settings.PROJECT_NAME,
+    description="Tender Management System API",
+    version=settings.API_VERSION,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Add security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Set up CORS
+if settings.BACKEND_CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Add rate limiting
+add_rate_limiter_to_app(app)
 
 # Import and include API routers
-from app.api import uploads
-app.include_router(uploads.router, prefix="/api/v1", tags=["Tender Processing"])
+from app.api import api_router
+app.include_router(api_router, prefix=settings.API_V1_STR)
 
-@app.get("/api/v1/health", tags=["Health"])
+# Add exception handlers
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors(), "body": exc.body},
+    )
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to Tender Management System API"}
+
+@app.get("/health")
 async def health_check():
-    """Health check endpoint to verify the API is running."""
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok"}
 
 # Application startup event
 @app.on_event("startup")
 async def startup_event():
     """Initialize application services."""
-    logger.info("Starting Tender Management API...")
-    
+    logger.info(f"Starting {settings.PROJECT_NAME} v{settings.API_VERSION}...")
+
     # Create necessary directories
-    Path("temp_uploads").mkdir(exist_ok=True)
+    settings.UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
 
 # Application shutdown event
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on shutdown."""
-    logger.info("Shutting down Tender Management API...")
+    logger.info("Shutting down API...")
     # Clean up any temporary files or resources
     import shutil
-    temp_dir = Path("temp_uploads")
-    if temp_dir.exists():
-        shutil.rmtree(temp_dir, ignore_errors=True)
+    if settings.UPLOAD_DIR.exists():
+        shutil.rmtree(settings.UPLOAD_DIR, ignore_errors=True)
 
-# This allows running the app with: uvicorn app.main:app --reload
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app.main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.DEBUG,
+        workers=1,
+    )

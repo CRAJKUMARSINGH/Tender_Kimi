@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+setup.py
+tender_kimi_backend.egg-info/PKG-INFO
+tender_kimi_backend.egg-info/SOURCES.txt
+tender_kimi_backend.egg-info/dependency_links.txt
+tender_kimi_backend.egg-info/requires.txt
+tender_kimi_backend.egg-info/top_level.txt

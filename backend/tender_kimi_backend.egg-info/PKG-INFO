@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: tender-kimi-backend
+Version: 0.1.0
+Requires-Python: >=3.8
+Requires-Dist: fastapi==0.95.2
+Requires-Dist: uvicorn[standard]==0.22.0
+Requires-Dist: pydantic==1.10.7
+Requires-Dist: httpx==0.24.1
+Requires-Dist: pandas==2.0.3
+Requires-Dist: openpyxl==3.1.2
+Requires-Dist: python-multipart==0.0.6
+Requires-Dist: typing-extensions==4.5.0
+Provides-Extra: test
+Requires-Dist: pytest==7.4.0; extra == "test"
+Requires-Dist: pytest-cov==4.1.0; extra == "test"
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python

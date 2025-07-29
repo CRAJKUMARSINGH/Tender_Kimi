@@ -1,0 +1,646 @@
+Below is a consolidated, chronological prompt for your in-house and outsourced teams to work on the Tender_Kimi project from Week-01 to Week-04. I've removed redundancies, organized tasks by week, and ensured all necessary code snippets and instructions are clear, concise, and copy-paste-ready. This prompt is designed to guide both teams to complete the project in parallel, with clear ownership and deliverables.
+
+---
+
+# 🚀 Tender_Kimi – Complete Week-1 to Week-4 Guide for In-House & Outsourced Teams
+
+This guide provides all tasks, code snippets, and deployment instructions for the Tender_Kimi project, covering Week-01 to Week-04. Tasks are split between the **in-house team** (FastAPI backend) and the **outsourced team** (React-Vite frontend). Save this as `Tender_Kimi_Complete_Guide.md` in the repo root and share with both teams.
+
+## 📁 Folder Map
+```
+repo/
+├── backend/          # FastAPI (Week-1, 3, 4) – In-house
+├── tender-frontend/  # React-Vite (Week-2, 3, 4) – Outsourced
+└── docs/             # Generated docs (optional) – Both
+```
+
+## 📅 Week-01: FastAPI Backend (MVP) – In-House Team
+
+### Tasks
+1. **Project Setup**
+   - Initialize FastAPI project with virtual environment and dependencies.
+   - Command:
+     ```bash
+     git checkout -b week01-poc-fastapi
+     mkdir backend && cd backend
+     python -m venv venv && source venv/bin/activate
+     pip install fastapi uvicorn python-multipart pandas openpyxl sqlalchemy aiosqlite pytest httpx redis aioredis slowapi structlog
+     ```
+
+2. **Async Excel Parser (Non-blocking)**
+   - File: `backend/app/services/excel_parser.py`
+     ```python
+     import asyncio
+     import pandas as pd
+     from fastapi import UploadFile, HTTPException
+     from app.config import settings
+
+     async def parse_excel(file: UploadFile):
+         if not file.filename.lower().endswith((".xlsx", ".xls")):
+             raise HTTPException(422, detail={"loc": ["body", "file"], "msg": "Invalid extension"})
+         content = await file.read()
+         if len(content) > settings.MAX_UPLOAD_BYTES:
+             raise HTTPException(413, detail={"loc": ["body", "file"], "msg": "File too large"})
+         df = await asyncio.to_thread(pd.read_excel, content)
+         return {"rows": df.fillna("").to_dict(orient="records")}
+     ```
+
+3. **Settings Module**
+   - File: `backend/app/config.py`
+     ```python
+     from pydantic import BaseSettings
+
+     class Settings(BaseSettings):
+         MAX_UPLOAD_BYTES: int = 5 * 1024 * 1024
+         REDIS_URL: str = "redis://localhost:6379"
+         SECRET_KEY: str = "change-me"
+         ALGORITHM: str = "HS256"
+     settings = Settings()
+     ```
+
+4. **Main Application**
+   - File: `backend/app/main.py`
+     ```python
+     from fastapi import FastAPI
+     from fastapi.middleware.cors import CORSMiddleware
+     from app.api.uploads import router as uploads_router
+     import uvicorn
+
+     app = FastAPI(title="Tender API", version="0.2.0")
+     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+     app.include_router(uploads_router, prefix="/api/v1")
+
+     if __name__ == "__main__":
+         uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+     ```
+
+5. **API Routes**
+   - File: `backend/app/api/uploads.py`
+     ```python
+     from fastapi import APIRouter, UploadFile, File, HTTPException
+     from fastapi.responses import FileResponse
+     from app.services.excel_parser import parse_excel
+
+     router = APIRouter()
+
+     @router.post("/upload")
+     async def upload(file: UploadFile = File(...)):
+         return await parse_excel(file)
+
+     @router.get("/download/{template}")
+     async def download_template(template: str):
+         allowed = {"single_work_nit.xlsx", "multi_work_nit.xlsx"}
+         if template not in allowed:
+             raise HTTPException(422, detail="Invalid template")
+         return FileResponse(f"templates/downloads/{template}", filename=template)
+
+     @router.get("/health")
+     async def health():
+         return {"status": "ok"}
+     ```
+
+6. **Rate Limiter**
+   - File: `backend/app/main.py` (add to existing file)
+     ```python
+     from fastapi import Depends
+     from fastapi_limiter import FastAPILimiter
+     from fastapi_limiter.depends import RateLimiter
+     import aioredis
+
+     @app.on_event("startup")
+     async def startup():
+         redis = await aioredis.create_redis_pool(settings.REDIS_URL)
+         await FastAPILimiter.init(redis)
+
+     @app.post("/upload", dependencies=[Depends(RateLimiter(times=10, seconds=60))])
+     ```
+
+7. **Security Headers**
+   - File: `backend/app/main.py` (add to existing file)
+     ```python
+     from fastapi.middleware.trustedhost import TrustedHostMiddleware
+     from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+
+     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+     ```
+
+8. **CI Cache & .gitignore**
+   - File: `.github/workflows/ci.yml`
+     ```yaml
+     - uses: actions/cache@v4
+       with:
+         path: ~/.cache/pip
+         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+     ```
+   - File: `.gitignore`
+     ```
+     .env
+     ```
+
+9. **Edge Tests**
+   - File: `tests/test_api.py`
+     ```python
+     import pytest
+     from fastapi.testclient import TestClient
+     from app.main import app
+
+     client = TestClient(app)
+
+     @pytest.mark.parametrize("file_name,code", [
+         ("empty.xlsx", 422),
+         ("big.xlsx", 413),
+         ("bad.pdf", 422),
+     ])
+     def test_upload_edges(file_name, code):
+         with open(f"tests/fixtures/{file_name}", "rb") as f:
+             resp = client.post("/upload", files={"file": f})
+         assert resp.status_code == code
+     ```
+
+10. **Tag & Release**
+    - Commands:
+      ```bash
+      git tag v0.2.1
+      git push origin v0.2.1
+      ```
+
+### Done Criteria
+- API runs on `http://localhost:8000`.
+- `/upload` endpoint parses Excel files and returns JSON.
+- `/download/{template}` serves `single_work_nit.xlsx` and `multi_work_nit.xlsx`.
+- Tests pass for edge cases (empty, oversized, invalid files).
+- Deployed to Render successfully.
+
+---
+
+## 📅 Week-02: React-Vite Frontend (SPA) – Outsourced Team
+
+### Tasks
+1. **Project Setup**
+   - Command:
+     ```bash
+     git checkout main && git pull
+     git checkout -b week02-frontend
+     npm create vite@latest tender-frontend --template react-ts
+     cd tender-frontend
+     npm i && npm i axios react-hook-form @tanstack/react-query react-hot-toast react-router-dom
+     npm i -D tailwindcss autoprefixer postcss
+     npx tailwindcss init -p
+     ```
+
+2. **Tailwind Config**
+   - File: `tender-frontend/tailwind.config.js`
+     ```javascript
+     export default {
+       content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+       theme: { extend: {} },
+       plugins: [],
+     }
+     ```
+   - File: `tender-frontend/src/index.css`
+     ```css
+     @tailwind base;
+     @tailwind components;
+     @tailwind utilities;
+     ```
+
+3. **Vercel Zero-Config**
+   - File: `tender-frontend/vercel.json`
+     ```json
+     {
+       "buildCommand": "npm run build",
+       "outputDirectory": "dist",
+       "installCommand": "npm ci",
+       "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+     }
+     ```
+
+4. **Environment Variables**
+   - File: `tender-frontend/.env.example`
+     ```
+     VITE_API_URL=https://your-backend.onrender.com/api/v1
+     ```
+   - Add real `VITE_API_URL` in Vercel dashboard → Settings → Environment Variables.
+
+5. **Core Files**
+   - File: `tender-frontend/src/lib/api.ts`
+     ```typescript
+     import axios from 'axios';
+     export const api = axios.create({
+       baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1',
+     });
+     ```
+   - File: `tender-frontend/src/App.tsx`
+     ```typescript
+     import { BrowserRouter, Routes, Route } from 'react-router-dom';
+     import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+     import UploadPage from './pages/UploadPage';
+     import DownloadPage from './pages/DownloadPage';
+
+     const queryClient = new QueryClient();
+     export default function App() {
+       return (
+         <QueryClientProvider client={queryClient}>
+           <BrowserRouter>
+             <Routes>
+               <Route path="/" element={<UploadPage />} />
+               <Route path="/download" element={<DownloadPage />} />
+             </Routes>
+           </BrowserRouter>
+         </QueryClientProvider>
+       );
+     }
+     ```
+   - File: `tender-frontend/src/pages/UploadPage.tsx`
+     ```typescript
+     import { useForm } from 'react-hook-form';
+     import { toast } from 'react-hot-toast';
+     import { api } from '../lib/api';
+
+     export default function UploadPage() {
+       const { register, handleSubmit } = useForm();
+       const onSubmit = async ({ file }: any) => {
+         const form = new FormData();
+         form.append('file', file[0]);
+         try {
+           const { data } = await api.post('/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+           toast.success(`Parsed ${data.rows.length} rows`);
+         } catch (e: any) {
+           toast.error(e.response?.data?.detail || 'Upload failed');
+         }
+       };
+       return (
+         <div className="p-8 max-w-lg mx-auto space-y-6">
+           <h1 className="text-2xl font-bold">Upload Tender Excel</h1>
+           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+             <input type="file" accept=".xlsx,.xls" {...register('file', { required: true })} className="file-input file-input-bordered w-full" />
+             <button className="btn btn-primary w-full">Upload & Preview</button>
+           </form>
+         </div>
+       );
+     }
+     ```
+   - File: `tender-frontend/src/pages/DownloadPage.tsx`
+     ```typescript
+     import { api } from '../lib/api';
+     export default function DownloadPage() {
+       return (
+         <div className="p-8 max-w-lg mx-auto text-center space-y-6">
+           <h1 className="text-2xl font-bold">Download Templates</h1>
+           <div className="space-x-4">
+             <a href={`${api.defaults.baseURL}/download/single_work_nit.xlsx`} download className="btn btn-outline">Single-Work</a>
+             <a href={`${api.defaults.baseURL}/download/multi_work_nit.xlsx`} download className="btn btn-outline">Multi-Work</a>
+           </div>
+         </div>
+       );
+     }
+     ```
+
+6. **Build & Deploy**
+   - Commands:
+     ```bash
+     git add tender-frontend
+     git commit -m "week02: react-vite frontend"
+     git push origin week02-frontend
+     ```
+   - Vercel auto-deploys; preview URL appears in PR.
+
+### Done Criteria
+- SPA runs on `localhost:5173` via `npm run dev`.
+- Vercel preview loads without MIME errors.
+- Upload and download buttons work end-to-end with backend.
+
+---
+
+## 📅 Week-03: Security & Frontend Polish – Both Teams
+
+### Backend (In-House Team)
+1. **Security Headers**
+   - File: `backend/app/main.py` (add to existing file)
+     ```python
+     from fastapi.middleware.security import SecurityHeadersMiddleware
+
+     app.add_middleware(
+         SecurityHeadersMiddleware,
+         headers={
+             "X-Content-Type-Options": "nosniff",
+             "X-Frame-Options": "DENY",
+             "X-XSS-Protection": "1; mode=block",
+         },
+     )
+     ```
+
+2. **Logging**
+   - File: `backend/app/config.py` (add to existing file)
+     ```python
+     import logging
+     from structlog import configure, processors, stdlib, threadlocal
+
+     configure(
+         processors=[
+             stdlib.filter_by_level,
+             stdlib.add_logger_name,
+             stdlib.add_log_level,
+             stdlib.PositionalArgumentsFormatter(),
+             processors.TimeStamper(fmt="iso"),
+             processors.StackInfoRenderer(),
+             processors.format_exc_info,
+             processors.JSONRenderer(),
+         ],
+         context_class=threadlocal.wrap_dict(dict),
+         logger_factory=stdlib.LoggerFactory(),
+         wrapper_class=stdlib.BoundLogger,
+         cache_logger_on_first_use=True,
+     )
+     logger = logging.getLogger(__name__)
+     ```
+
+3. **Environment Variables**
+   - File: `backend/.env.example`
+     ```
+     REDIS_URL=redis://localhost:6379
+     MAX_UPLOAD_BYTES=5242880
+     ```
+
+4. **Build & Deploy**
+   - Commands:
+     ```bash
+     git add backend
+     git commit -m "week03: backend security"
+     git push origin week03-backend
+     ```
+
+### Frontend (Outsourced Team)
+1. **Form Validation & Error Handling**
+   - File: `tender-frontend/src/pages/UploadPage.tsx`
+     ```typescript
+     import { useForm, Controller } from 'react-hook-form';
+     import { toast } from 'react-hot-toast';
+     import { api } from '../lib/api';
+
+     export default function UploadPage() {
+       const { control, handleSubmit } = useForm({
+         defaultValues: { file: null },
+       });
+
+       const onSubmit = async ({ file }: { file: File }) => {
+         const form = new FormData();
+         form.append('file', file);
+         try {
+           const { data } = await api.post('/upload', form, { headers: { 'Content-Type': 'multipart/form-data' } });
+           toast.success(`Parsed ${data.rows.length} rows`);
+         } catch (e: any) {
+           toast.error(e.response?.data?.detail || 'Upload failed');
+         }
+       };
+
+       return (
+         <div className="p-8 max-w-lg mx-auto space-y-6">
+           <h1 className="text-2xl font-bold">Upload Tender Excel</h1>
+           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+             <Controller
+               name="file"
+               control={control}
+               rules={{ required: 'File is required' }}
+               render={({ field, fieldState }) => (
+                 <div>
+                   <input
+                     type="file"
+                     accept=".xlsx,.xls"
+                     {...field}
+                     className={`file-input file-input-bordered w-full ${fieldState.error ? 'border-red-500' : ''}`}
+                   />
+                   {fieldState.error && <p className="text-red-500">{fieldState.error.message}</p>}
+                 </div>
+               )}
+             />
+             <button className="btn btn-primary w-full">Upload & Preview</button>
+           </form>
+         </div>
+       );
+     }
+     ```
+
+2. **Toast Notifications**
+   - File: `tender-frontend/src/App.tsx` (add to existing file)
+     ```typescript
+     import { Toaster } from 'react-hot-toast';
+
+     export default function App() {
+       return (
+         <QueryClientProvider client={queryClient}>
+           <BrowserRouter>
+             <Routes>
+               <Route path="/" element={<UploadPage />} />
+               <Route path="/download" element={<DownloadPage />} />
+             </Routes>
+             <Toaster position="top-center" reverseOrder={false} />
+           </BrowserRouter>
+         </QueryClientProvider>
+       );
+     }
+     ```
+
+3. **Tailwind Customizations**
+   - File: `tender-frontend/tailwind.config.js` (update existing file)
+     ```javascript
+     export default {
+       content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+       theme: {
+         extend: {
+           colors: {
+             primary: '#007bff',
+             secondary: '#6c757d',
+           },
+           spacing: {
+             '128': '32rem',
+           },
+         },
+       },
+       plugins: [],
+     }
+     ```
+
+4. **Environment Variables**
+   - File: `tender-frontend/.env.example` (update existing file)
+     ```
+     VITE_API_URL=https://your-backend.onrender.com/api/v1
+     VITE_APP_NAME=TenderApp
+     ```
+
+5. **Build & Deploy**
+   - Commands:
+     ```bash
+     git add tender-frontend
+     git commit -m "week03: frontend polish"
+     git push origin week03-frontend
+     ```
+
+### Done Criteria
+- **Backend**: Security headers and logging implemented; deployed to Render.
+- **Frontend**: Form validation with error messages; toast notifications displayed; Vercel deployment successful.
+
+---
+
+## 📅 Week-04: Authentication & Finalization – Both Teams
+
+### Backend (In-House Team)
+1. **User Authentication**
+   - File: `backend/app/main.py` (add to existing file)
+     ```python
+     from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+     from fastapi import Depends, HTTPException, status
+     from jose import jwt, JWTError
+     from app.config import settings
+
+     oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+     async def get_current_user(token: str = Depends(oauth2_scheme)):
+         try:
+             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+             username: str = payload.get("sub")
+             if username is None:
+                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+             return username
+         except JWTError:
+             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+     ```
+
+2. **Protected Routes**
+   - File: `backend/app/api/uploads.py` (update existing file)
+     ```python
+     from fastapi import Depends
+     from app.main import get_current_user
+
+     @router.post("/upload")
+     async def upload(file: UploadFile = File(...), current_user: str = Depends(get_current_user)):
+         return await parse_excel(file)
+     ```
+
+3. **Build & Deploy**
+   - Commands:
+     ```bash
+     git add backend
+     git commit -m "week04: backend finalization"
+     git push origin week04-backend
+     ```
+
+### Frontend (Outsourced Team)
+1. **User Authentication**
+   - File: `tender-frontend/src/lib/auth.ts`
+     ```typescript
+     import { useAuth0 } from '@auth0/auth0-react';
+
+     export const AuthButton = () => {
+       const { isAuthenticated, loginWithRedirect, logout } = useAuth0();
+       return isAuthenticated ? (
+         <button onClick={() => logout({ returnTo: window.location.origin })}>Logout</button>
+       ) : (
+         <button onClick={() => loginWithRedirect()}>Login</button>
+       );
+     };
+     ```
+
+2. **Protected Routes**
+   - File: `tender-frontend/src/App.tsx` (update existing file)
+     ```typescript
+     import { useAuth0 } from '@auth0/auth0-react';
+     import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+     import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+     import { Toaster } from 'react-hot-toast';
+     import UploadPage from './pages/UploadPage';
+     import DownloadPage from './pages/DownloadPage';
+
+     const queryClient = new QueryClient();
+
+     const PrivateRoute = ({ children }: { children: JSX.Element }) => {
+       const { isAuthenticated } = useAuth0();
+       return isAuthenticated ? children : <Navigate to="/" />;
+     };
+
+     export default function App() {
+       const { isLoading } = useAuth0();
+       if (isLoading) return <div>Loading...</div>;
+       return (
+         <QueryClientProvider client={queryClient}>
+           <BrowserRouter>
+             <Routes>
+               <Route path="/" element={<UploadPage />} />
+               <Route path="/download" element={<PrivateRoute><DownloadPage /></PrivateRoute>} />
+             </Routes>
+             <Toaster position="top-center" reverseOrder={false} />
+           </BrowserRouter>
+         </QueryClientProvider>
+       );
+     }
+     ```
+   - Wrap `App` in `index.tsx`:
+     ```typescript
+     import { Auth0Provider } from '@auth0/auth0-react';
+     import App from './App';
+
+     ReactDOM.render(
+       <Auth0Provider
+         domain="your-domain.auth0.com"
+         clientId="your-client-id"
+         redirectUri={window.location.origin}
+       >
+         <App />
+       </Auth0Provider>,
+       document.getElementById('root')
+     );
+     ```
+
+3. **Build & Deploy**
+   - Commands:
+     ```bash
+     git add tender-frontend
+     git commit -m "week04: frontend finalization"
+     git push origin week04-frontend
+     ```
+
+### Done Criteria
+- **Backend**: OAuth2 authentication implemented; `/upload` route protected; deployed to Render.
+- **Frontend**: Auth0 login/logout functional; `/download` route protected; Vercel deployment successful.
+
+---
+
+## ✅ Finalization Checklist
+### Frontend (Outsourced Team)
+- [ ] All routes protected by Auth0
+- [ ] User authentication implemented
+- [ ] Toast notifications working
+- [ ] Tailwind customizations applied
+- [ ] Environment variables set
+- [ ] Vercel deployment successful
+### Backend (In-House Team)
+- [ ] Security headers added
+- [ ] Logging configured
+- [ ] Rate limiting implemented
+- [ ] User authentication implemented
+- [ ] Protected routes enforced
+- [ ] Render deployment successful
+### Testing (Both Teams)
+- [ ] Frontend tests pass
+- [ ] Backend tests pass
+- [ ] End-to-end tests pass
+### Documentation (Both Teams)
+- [ ] README updated
+- [ ] API docs updated
+- [ ] Deployment instructions updated
+### Release (Both Teams)
+- [ ] Tag release `v1.0.0`:
+  ```bash
+  git tag v1.0.0
+  git push origin v1.0.0
+  ```
+- [ ] Push to main
+- [ ] Notify stakeholders
+
+---
+
+## Instructions for Teams
+- **In-House Team**: Focus on Week-01 and Week-03/04 backend tasks. Ensure Render deployment and backend tests pass.
+- **Outsourced Team**: Focus on Week-02 and Week-03/04 frontend tasks. Ensure Vercel deployment and frontend tests pass.
+- **Both Teams**: Collaborate on end-to-end tests, documentation, and final release in Week-04.
+- Commit `Tender_Kimi_Complete_Guide.md` to the repo root and share the link with all stakeholders.
